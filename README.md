@@ -7,7 +7,7 @@ This project involves a detailed analysis and modelling of Spotify track data, f
 ## Repository Contents
 
 - main.Rmd: This R Markdown document contains all source code for the project, including data loading, preprocessing, exploratory data analysis, and regression modelling.
-- main.html: A rendered HTML version of the R Markdown file, knitted for easier viewing, which includes comprehensive outputs and visualizations of the analyses.
+- main.pdf: A rendered PDF version of the R Markdown file, knitted for easier viewing, which includes comprehensive outputs and visualizations of the analyses.
 - data folder: A folder containing multiple CSV files, each corresponding to a different genre of music. These files collectively provide comprehensive information on a variety of tracks available in the Spotify dataset.
 
 ## Data Description
