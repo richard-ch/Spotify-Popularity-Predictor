@@ -5,7 +5,7 @@ output:
   pdf_document: default
 ---
 
-```{r setup, message = F, warning=F}
+```{r setup, message = FALSE, warning=F}
 knitr::opts_chunk$set(echo = TRUE)
 library(tidyverse)
 library(purrr)
@@ -18,7 +18,7 @@ set.seed(743)
 
 ```{r read file, eval = F}
 # Set it as current directory
-data_dir <- "~/Documents/Spotify Popularity Predictor"
+data_dir <- "C:\Users\Richard\Spotify-Popularity-Predictor"
 
 # List all the CSV files in the directory
 csv_files <- list.files(paste0(data_dir, "/data"), pattern = ".*csv", full.names = TRUE)
