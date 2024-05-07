@@ -1,0 +1,272 @@
+---
+title: 'Spotify Popularity Prediction'
+output:
+  html_document: default
+  pdf_document: default
+---
+
+```{r setup, message = F, warning=F}
+knitr::opts_chunk$set(echo = TRUE)
+library(tidyverse)
+library(purrr)
+library(leaps)
+library(boot)
+set.seed(743)
+```
+
+
+
+```{r read file, eval = F}
+# Set it as current directory
+data_dir <- "~/Documents/Spotify Popularity Predictor"
+
+# List all the CSV files in the directory
+csv_files <- list.files(paste0(data_dir, "/data"), pattern = ".*csv", full.names = TRUE)
+
+# Read and combine the CSV files using map function and read_csv
+combined_data <- map(csv_files, read_csv, show_col_types = FALSE) %>%
+  bind_rows()
+
+saveRDS(combined_data, file = "combined_data.rds", compress = FALSE)
+```
+
+
+```{r reading files again}
+combined_data <- readRDS("combined_data.rds")
+head(combined_data, n = 15)
+```
+
+
+### Quantifying Data Properties
+
+```{r}
+number <- dim(combined_data)
+number
+```
+There are 114000 rows and 20 columns
+
+Each row represents a track on Spotify, with details about the track such as `artist`, `album`, `popularity` and other musical attributes like `tempo` and `key`.
+
+```{r 1c}
+unique_genres <- unique(combined_data$track_genre)
+number_of_genres <- length(unique_genres)
+number_of_genres
+```
+There are 114 genres in this data set.
+
+
+First we need to remove the songs with zero popularity.
+```{r 2}
+filtered_data <- combined_data %>% filter(popularity > 0)
+```
+
+```{r}
+
+# Find the top N genres by mean popularity
+top_10_genres <- combined_data %>%
+  group_by(track_genre) %>%
+  summarise(mean_popularity = mean(popularity)) %>%
+  top_n(10, mean_popularity)
+
+# Filter the data to include only the top 10 genres
+top_genres_data <- combined_data %>%
+  filter(track_genre %in% top_10_genres$track_genre)
+
+# Create the boxplot
+ggplot(top_genres_data, aes(x = popularity, y = reorder(track_genre, -popularity))) +
+  geom_boxplot() +
+  xlab("Popularity") +
+  ylab("Genre") +
+  ggtitle("BoxPlot of Popularity by Top 10 Genres")
+```
+
+
+```{r}
+num_rows_removed <- nrow(combined_data) - nrow(filtered_data)
+num_rows_removed
+```
+`16020` Rows of data removed when filtering songs with 0 popularity. 
+
+We filtered out the data with 0 popularity as it could represent missing or skewed data. This could affect our prediction model.
+
+```{r}
+colSums(is.na(filtered_data))
+```
+There are no NA values in the `filtered_data`.
+
+Some inappropriate variables for modelling are `track_id` because this is just a unique identifier and does not help with predictions. `album_name` and `track_name` doesn't really help with predictions either, however, `artists` may help because a song from Taylor Swift for example will be much more popular than a random indie pop band.
+
+`track_genre` is a categorical variable and needs to be encoded for modelling. We can use one-hot encoding to transform these into numerical variables if we want to use it for our model.
+
+
+Model selection choices:
+Target Variable - `popularity` will be the target variable.
+
+```{r}
+allyhat <- function(xtrain, ytrain, xtest, lambdas, nvmax = 50) {
+  # Number of observations in the training data
+  n <- nrow(xtrain)
+  
+  # Initialise a matrix to store the predicted responses
+  yhat <- matrix(nrow = nrow(xtest), ncol = length(lambdas))
+  
+  # Perform backward subset selection on the training data
+  search <- regsubsets(xtrain, ytrain, nvmax = nvmax, method = "back")
+  
+  # Get a summary of the subset selection result
+  summ <- summary(search)
+  
+  # Loop over each value of lambda
+  for (i in 1:length(lambdas)) {
+    # Calculate the penalized MSE for models with different numbers of predictors
+    penMSE <- n * log(summ$rss) + lambdas[i] * (1:nvmax)
+    
+    # Find the model with the smallest penalized MSE
+    best <- which.min(penMSE)
+    
+    # Get the coefficients of the best model
+    betahat <- coef(search, best)
+    
+    # Get the predictors in the best model
+    xinmodel <- cbind(1, xtest)[, summ$which[best, ]]
+    
+    # Calculate the predicted responses for the test data
+    yhat[, i] <- xinmodel %*% betahat
+  }
+  
+  # Return the matrix of predicted responses
+  yhat
+}
+```
+
+
+```{r fitting}
+# Create a new column with the selected variables
+spotify_data <- filtered_data[, c(
+  "danceability",
+  "energy",
+  "loudness",
+  "speechiness",
+  "acousticness",
+  "instrumentalness",
+  "liveness",
+  "valence",
+  "tempo",
+  "time_signature",
+  "popularity"
+)]
+
+X <- as.matrix(filtered_data[, -c(1:5, 20)])
+
+# Extract the response variable
+y <- filtered_data$popularity
+
+set.seed(743)
+
+folds <- sample(rep(1:10, length.out = nrow(X)))
+
+# Define a set of lambda values
+lambdas <- c(2, 4, 6, 8, 10, 12)
+
+# Init a matrix to store fitted values
+fitted <- matrix(nrow = nrow(X), ncol = length(lambdas))
+
+# Perform cross-validation using the allyhat function 
+for (k in 1:10) {
+  train <- (1:nrow(X))[folds != k]
+  test <- (1:nrow(X))[folds == k]
+  fitted[test, ] <- allyhat(X[train, ], y[train], X[test, ], lambdas, nvmax = 14)
+}
+
+result <- rbind(lambdas, colMeans((y - fitted) ^ 2))
+print(result)
+
+opt_lambda = 6
+```
+
+seems like $\lambda$ = 2,4,6 has the lowest MSPE  of 344.1721
+
+```{r finding coeff}
+search <- regsubsets(X, y, nvmax = 14, method = "backward")
+summ <- summary(search)
+
+
+penMSE <- nrow(X)*log(summ$rss)+ opt_lambda*(1:14)
+best <- which.min(penMSE)
+betahat <- coef(search, best)
+betahat |> 
+  as_tibble(rownames = "Variable") |> 
+  rename(Coeff = value) |> 
+  mutate(Coeff = round(Coeff, 3)) |> 
+  knitr::kable()
+```
+Based on this, we can select the model predictors. It seems like `speechiness`, `instrumentalness`, `valence`, `energy`, `dancebility`and `,explicit` all has a relative big impact on the popularity. 
+
+Our target variable is still `popularity`. 
+
+I used a linear regression model with all two-way interactions. This allows for a quick model and capture the potential relationships between the features without increasing computational complexity too much.
+
+I used a lambda value of 6 at the end, even though 2, 4 and 6 all shared the same MSPE.
+
+However, we haven't checked the assumptions such as linearity, normality of residuals and homoscedascity yet.
+## Task 1.2.4
+
+```{r}
+# Fit final model using selected predictors
+final_model <- lm(popularity ~ speechiness + instrumentalness + valence + energy + danceability + explicit, 
+            data = filtered_data)
+
+# Summary of the final model
+summary(final_model)
+```
+
+```{r}
+hist(resid(final_model))
+```
+
+The residuals look pretty normally distributed, which means our model is fine.
+
+After fitting the final model with our selected predictors, I ran it through the summary function. All the predictors/coefficients have p-value of <0.05, which means they are all statistically significant. 
+
+However, we have a R-squared value of 0.062, which means our model only explains 6.2% of the variations in `popularity`. This means that  while the model does capture some underlying pattern in the data, the low R-squared sugggests there are other factors that I haven't included in this model that contributes to the popularity.
+
+
+## Testing the prediction with a random song selection
+
+```{r bootstrapping}
+set.seed(743)
+
+# Choose a song from the cleaned dataset
+my_song <- filtered_data |> 
+  slice(614)
+
+# Display the data for the song using kable()
+knitr::kable(my_song)
+
+# Prediction function for bootstrapping
+pred_func <- function(data, i){
+  fit <- lm(popularity ~ speechiness + instrumentalness + valence + energy + danceability + explicit,
+            data = data[i,])
+  predict(fit, my_song, interval = "none")
+}
+
+# Perform bootstrapping with at least 1000 iterations
+
+boots <- boot(filtered_data, pred_func, R = 1000)
+
+
+# Calculate 95% confidence interval for the prediction
+ci <- boots$t0 + c(-1.96, 1.96) * sd(boots$t)
+round(ci, 2)
+```
+
+The confidence interval is 41.98 to 42.42
+
+
+# References
+Maharshi Pandya. (2022). 🎹 Spotify Tracks Dataset [Data set]. Kaggle. https://doi.org/10.34740/KAGGLE/DSV/4372070
+
+
+
+
+
